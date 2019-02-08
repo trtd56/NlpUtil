@@ -18,7 +18,7 @@ class Vocab():
         self.__itos = None
         self.__min_count = None
 
-    def set_dict(self, docs, min_count=1):
+    def set_dict(self, docs, min_count):
         self.__min_count = min_count
         wakati_list = [Vocab.separate_by_mecab(text) for text in docs]
         words = self.__grep_words(wakati_list)

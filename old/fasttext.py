@@ -1,108 +1,102 @@
 # -*- coding: utf-8 -*-
 
-import numpy as np
 import subprocess
-from sklearn import svm
-from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+import pandas as pd
+from sklearn.cross_validation import train_test_split
 
 from vocab import Vocab
-import pickle
-from sklearn import cross_validation
-
-IN_PATH = "../../NLP/data/jawiki-abs-wakati.txt"
-OUT_DIR = "./model"
-DIM = 200
-RATIO = 0.1
 
 class FastText():
     """
     cf: https://github.com/facebookresearch/fastText
     """
 
-    def __init__(self, out_dir, dim=200):
-        self.in_path = None
-        self.out_path = out_dir + "/fasttext_" + str(dim)
-        self.__dim = dim
+    __TRAIN_FILE = "wakati.txt"
+    __MODEL_FILE = "model"
+    __TEST_FILE  = "wakati_vali.txt"
 
-    def supervised(self, wakati, min_count=5):
-        self.min_count = min_count
-        self.in_path = wakati
-        cmd = self.__gen_cmd()
-        # TODO: not secure.
-        subprocess.call(cmd, shell=True)
+    def __init__(self, model_dir):
+        self.model_dir   = model_dir
+        self.wakati_path = "{}/{}".format(model_dir, self.__TRAIN_FILE)
+        self.model_path  = "{}/{}".format(model_dir, self.__MODEL_FILE)
+        self.test_path  = "{}/{}".format(model_dir, self.__TEST_FILE)
+        self.__init_param()
 
-    def __gen_cmd(self):
-        cmd = "fasttext skipgram -input {} -output {} -dim {} -minCount {}".format(self.in_path, self.out_path, self.__dim, self.min_count)
-        return cmd
+    def set_train_data(self, doc_list, lab_list, raito):
+        train_x, test_x = train_test_split(doc_list, test_size=raito)
+        train_t, test_t = train_test_split(lab_list, test_size=raito)
+        self.make_text_file(self.wakati_path, train_x, train_t)
+        self.make_text_file(self.test_path, test_x, test_t)
 
-    def load(self):
-        vec_path = self.out_path + ".vec"
-        self.__model = self.__load_fasttext_vec(vec_path)
+    def make_text_file(self, path, doc_list, lab_list):
+        with open(path, mode='w') as f:
+            for doc, lab in zip(doc_list, lab_list):
+                doc = " ".join(Vocab.separate_by_mecab(doc))
+                line = "__label__{} , {}\n".format(lab, doc)
+                f.writelines(line)
 
-    def __load_fasttext_vec(self, path):
-        vectors = {}
-        with open(path, "r", encoding="utf-8") as vec:
-            for i, line in enumerate(vec):
-                try:
-                    elements = line.strip().split()
-                    word = elements[0]
-                    vec = np.array(elements[1:], dtype=float)
-                    if not (word in vectors) and len(vec) >= 100:
-                        # ignore the case that vector size is invalid
-                        vectors[word] = vec
-                except ValueError:
-                    continue
-                except UnicodeDecodeError:
-                    continue
-            return vectors
+    def supervised(self):
+        cmd = ["fasttext", "supervised", "-input", self.wakati_path, "-output", self.model_path]
+        cmd += self.__get_optional_param()
+        cmd = [str(i) for i in cmd]
+        subprocess.check_call(cmd)
 
-    def get_vector(self, word):
-        try:
-            return self.__model[word]
-        except KeyError:
-            return np.zeros(self.__dim)
+    def test(self, k=1):
+        cmd = ["fasttext", "test", self.model_path+".bin", self.test_path, k]
+        cmd = [str(i) for i in cmd]
+        subprocess.check_call(cmd)
 
-    def get_vec_size(self):
-        return self.__dim
+    def predict(self, k=1):
+        cmd = ["fasttext", "predict", self.model_path+".bin", self.test_path, k]
+        cmd = [str(i) for i in cmd]
+        subprocess.check_call(cmd)
 
-    def get_doc_vector(self, doc):
-        if type(doc) is not list:
-            doc = Vocab.separate_by_mecab(doc)
-        vec = np.array([self.get_vector(word) for word in doc])
-        if len(vec) == 0:
-            return np.zeros(self.__dim)
-        return vec.mean(axis=0)
+    def set_param(self, param_dict):
+        for k,v in param_dict.items():
+            exec("self.{} = {}".format(k, v))
 
-def put_one_label(labels, no):
-    t_list = [lab[no] for lab in labels]
-    return  np.array(t_list)
+    def __init_param(self):
+        self.lr                 = 0.1           #learning rate [0.1]
+        self.lrUpdateRate       = 100           #change the rate of updates for the learning rate [100]
+        self.dim                = 100           #size of word vectors [100]
+        self.ws                 = 5             #size of the context window [5]
+        self.epoch              = 5             #number of epochs [5]
+        self.minCount           = 1             #minimal number of word occurences [1]
+        self.minCountLabel      = 0             #minimal number of label occurences [0]
+        self.neg                = 5             #number of negatives sampled [5]
+        self.wordNgrams         = 1             #max length of word ngram [1]
+        self.loss               = "ns"          #loss function {ns, hs, softmax} [ns]
+        self.bucket             = 2000000       #number of buckets [2000000]
+        self.minn               = 0             #min length of char ngram [0]
+        self.maxn               = 0             #max length of char ngram [0]
+        self.thread             = 12            #number of threads [12]
+        self.t                  = 0.0001        #sampling threshold [0.0001]
+        self.label              = "__label__"   #labels prefix [__label__]
+        self.verbose            = 2             #verbosity level [2]
+        self.pretrainedVectors  = None          #pretrained word vectors for supervised learning []
+
+    def __get_optional_param(self):
+        params = ["-lr",self.lr,"-lrUpdateRate",self.lrUpdateRate,"-dim",self.dim,
+                  "-ws",self.ws,"-epoch",self.epoch,"-minCount",self.minCount,
+                  "-minCountLabel",self.minCountLabel,"-neg",self.neg,"-wordNgrams",self.wordNgrams,
+                  "-loss",self.loss,"-bucket",self.bucket,"-minn",self.minn,"-maxn",self.maxn,
+                  "-thread",self.thread,"-t",self.t,"-label",self.label,"-verbose",self.verbose]
+        if not self.pretrainedVectors:
+            params + ["-pretrainedVectors",self.pretrainedVectors]
+        return params
 
 if __name__ == '__main__':
-    fasttext = FastText(OUT_DIR)
-    #fasttext.supervised(IN_PATH)
-    fasttext.load()
+    df = pd.read_csv("./sample.csv", header=None)
+    doc_list = df[1].tolist()
+    lab_list = df[0].tolist()
+    raito = 0.1
 
-    vocab = Vocab.load("./model/news_vocab.pkl")
-    with open("./model/train_data.pkl", mode='rb') as f:
-        train_data = pickle.load(f)
-    train_x, vali_x = cross_validation.train_test_split(train_data["x"], test_size=RATIO)
-    #train_t, vali_t = cross_validation.train_test_split(train_data["t"], test_size=RATIO)
-    train_t, vali_t = cross_validation.train_test_split([t.index(1) for t in train_data["t"]], test_size=RATIO)
-    x_vocab = [vocab.remove_meta(vocab.ids2doc(x)) for x in train_x]
-    x_vocab_v = [vocab.remove_meta(vocab.ids2doc(x)) for x in vali_x]
+    fasttext = FastText("./result")
+    fasttext.set_train_data(doc_list, lab_list, raito)
 
-    train_features = [fasttext.get_doc_vector(x) for x in x_vocab]
-    test_features = [fasttext.get_doc_vector(x) for x in x_vocab_v]
-    train_labels = np.array(train_t)
-    test_labels = np.array(vali_t)
+    param_dict = {"dim":150, "epoch":10}
+    fasttext.set_param(param_dict)
 
-    #for i in range(9):
-    #    train_labels = put_one_label(train_t, i)
-    #    test_labels = put_one_label(vali_t, i)
-
-    clf = svm.SVC()
-    clf.fit(train_features, train_labels)
-    test_pred = clf.predict(test_features)
-
-    print(classification_report(test_labels, test_pred))
-    print(accuracy_score(test_labels, test_pred))
+    fasttext.supervised()
+    fasttext.test()
+    fasttext.predict()
